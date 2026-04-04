@@ -34,9 +34,16 @@ public class Receiver {
 	public void receiveJob(JobMessage job) {
 
 		// Region-Filter anwenden (leer = alle Regionen)
-		if (filterRegion != null && !filterRegion.isEmpty()
-				&& !filterRegion.equalsIgnoreCase(job.getRegion())) {
-			return;
+		if (filterRegion != null && !filterRegion.isEmpty()) {
+			String[] regions = filterRegion.split(",");
+			boolean match = false;
+			for (String r : regions) {
+				if (r.trim().equalsIgnoreCase(job.getRegion())) {
+					match = true;
+					break;
+				}
+			}
+			if (!match) return;
 		}
 
 		// JobType-Filter anwenden (leer = alle Typen)
@@ -51,7 +58,7 @@ public class Receiver {
 		JobRequestMessage request = new JobRequestMessage(job.getJobId(), clientId);
 		queueJmsTemplate.convertAndSend(requestAssignmentQueue, request);
 
-		simpleUi.appendMessage("Zuweisung angefragt fuer: " + job.getJobId());
+		simpleUi.appendMessage("Zuweisung angefragt für: " + job.getJobId());
 	}
 
 	// Zuweisungsbestätigungen vom Topic empfangen

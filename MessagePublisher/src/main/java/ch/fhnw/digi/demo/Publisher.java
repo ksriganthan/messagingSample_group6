@@ -55,8 +55,15 @@ public class Publisher {
 
 			JobMessage job = new JobMessage(jobId, jobType + " Auftrag #" + counter, region, jobType);
 
-			// Auftrag auf Topic veröffentlichen
+
+			// 1. Auf Haupt-Topic veröffentlichen (alle Aufträge)
 			topicJmsTemplate.convertAndSend(newJobsTopic, job);
+
+			// 2. Content-Based Router: zusätzlich auf regionsspezifisches Topic
+			topicJmsTemplate.convertAndSend(newJobsTopic + "." + region, job);
+
+			// 3. Content-Based Router: zusätzlich auf typspezifisches Topic
+			topicJmsTemplate.convertAndSend(newJobsTopic + "." + jobType, job);
 
 			simpleUi.appendMessage("Veröffentlicht: " + job);
 			counter++;

@@ -34,7 +34,7 @@ public class SimpleUi extends JFrame {
 		String regionDisplay = (filterRegion == null || filterRegion.isEmpty()) ? "alle" : filterRegion;
 		String jobTypeDisplay = (filterJobType == null || filterJobType.isEmpty()) ? "alle" : filterJobType;
 		setSize(550, 400);
-		setTitle("Auftrags-Client [" + clientId + "] - Region: " + regionDisplay + " | Typ: " + jobTypeDisplay);
+		setTitle("Auftrags-Client [" + clientId + "] - Clientseitige-Filterung: Region: " + regionDisplay + " | Typ: " + jobTypeDisplay);
 		setDefaultCloseOperation(EXIT_ON_CLOSE);
 		logArea = new JTextArea();
 		logArea.setEditable(false);
