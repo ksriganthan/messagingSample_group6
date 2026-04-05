@@ -155,7 +155,7 @@ Wird von der Disposition auf dem Topic `group6.dispo.jobs.new` veröffentlicht.
 |---|---|---|
 | `jobId` | String | Eindeutige Auftrags-ID (z.B. `JOB-0001`) |
 | `description` | String | Beschreibung des Auftrags |
-| `region` | String | Region des Auftrags (`basel`, `zürich`, `bern`) |
+| `region` | String | Region des Auftrags (`basel`, `zuerich`, `bern`) |
 | `jobType` | String | Art des Auftrags (`repair` = Reparatur, `maintenance` = Wartung) |
 
 ### 4.2 JobRequestMessage – Zuweisungsanfrage
@@ -202,7 +202,7 @@ Der Publisher simuliert die zentrale Disposition. Er hat zwei Verantwortlichkeit
 
 1. **Aufträge erzeugen und veröffentlichen**: Alle 2 Sekunden wird ein neuer Auftrag erstellt
    und auf dem Topic `group6.dispo.jobs.new` veröffentlicht. Die Aufträge rotieren durch die
-   Regionen (Basel → Zürich → Bern) und Typen (Repair → Maintenance).
+   Regionen (Basel → Zuerich → Bern) und Typen (Repair → Maintenance).
 
 2. **Zuweisungsanfragen verarbeiten**: Der Publisher hört auf die Queue
    `group6.dispo.jobs.requestAssignment`. Wenn ein Client einen Auftrag anfragt, prüft die
@@ -342,7 +342,7 @@ channel.topic.assignments=group6.dispo.jobs.assignments
 |---|---|
 | `client.region=` | Empfängt Aufträge **aller** Regionen |
 | `client.region=basel` | Nur Aufträge der Region Basel |
-| `client.region=zürich` | Nur Aufträge der Region Zürich |
+| `client.region=zuerich` | Nur Aufträge der Region Zuerich |
 | `client.region=bern` | Nur Aufträge der Region Bern |
 
 #### JobType-Filter

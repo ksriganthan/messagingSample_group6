@@ -1,7 +1,5 @@
 package ch.fhnw.digi.demo;
 
-import javax.annotation.PostConstruct;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,67 +29,50 @@ public class Publisher {
 	// Merkt sich welche Aufträge bereits vergeben sind (JobId -> ClientId)
 	private final Map<String, String> assignedJobs = new ConcurrentHashMap<>();
 
-	private static final String[] REGIONS = {"basel", "zürich", "bern"};
-	private static final String[] JOB_TYPES = {"repair", "maintenance"};
+	/**
+	 * Wird von der GUI aufgerufen, wenn der Disponent einen neuen Auftrag erstellt.
+	 * Veröffentlicht den Auftrag auf dem Haupt-Topic sowie auf den
+	 * regionsspezifischen und typspezifischen Content-Based-Router Topics.
+	 */
+	public void publishJob(JobMessage job) {
+		// 1. Auf Haupt-Topic veröffentlichen (alle Aufträge)
+		topicJmsTemplate.convertAndSend(newJobsTopic, job);
 
-	@PostConstruct
-	void init() {
-		// Publishing in separatem Thread, damit Spring-Context fertig starten kann
-		Thread thread = new Thread(this::publishJobs);
-		thread.setDaemon(true);
-		thread.start();
+		// 2. Content-Based Router: zusätzlich auf regionsspezifisches Topic
+		topicJmsTemplate.convertAndSend(newJobsTopic + "." + job.getRegion(), job);
+
+		// 3. Content-Based Router: zusätzlich auf typspezifisches Topic
+		topicJmsTemplate.convertAndSend(newJobsTopic + "." + job.getJobType(), job);
 	}
 
-	private void publishJobs() {
-		int counter = 0;
-
-		// Kurz warten, bis Spring-Context vollständig gestartet ist (Alle 3 Sek. kurz warten)
-		try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
-
-		while (true) {
-			String region = REGIONS[counter % REGIONS.length];
-			String jobType = JOB_TYPES[counter % JOB_TYPES.length];
-			String jobId = "JOB-" + String.format("%04d", counter);
-
-			JobMessage job = new JobMessage(jobId, jobType + " Auftrag #" + counter, region, jobType);
-
-
-			// 1. Auf Haupt-Topic veröffentlichen (alle Aufträge)
-			topicJmsTemplate.convertAndSend(newJobsTopic, job);
-
-			// 2. Content-Based Router: zusätzlich auf regionsspezifisches Topic
-			topicJmsTemplate.convertAndSend(newJobsTopic + "." + region, job);
-
-			// 3. Content-Based Router: zusätzlich auf typspezifisches Topic
-			topicJmsTemplate.convertAndSend(newJobsTopic + "." + jobType, job);
-
-			simpleUi.appendMessage("Veröffentlicht: " + job);
-			counter++;
-
-			// Alle 2 Sekunden einen neuen Auftrag
-			try { Thread.sleep(2000); } catch (InterruptedException e) { break; }
-		}
-	}
-
-	// Zuweisungsanfragen von der Queue empfangen und prüfen
+	/**
+	 * Zuweisungsanfragen von der Queue empfangen.
+	 * Statt automatisch zu entscheiden, wird die Anfrage an die GUI weitergeleitet,
+	 * damit der Disponent manuell zuweisen oder ablehnen kann.
+	 */
 	@JmsListener(destination = "${channel.queue.requestAssignment}", containerFactory = "queueFactory")
 	public void handleAssignmentRequest(JobRequestMessage request) {
+		simpleUi.appendMessage("ANFRAGE eingegangen: " + request.getJobId() + " von " + request.getClientId());
+		simpleUi.addPendingRequest(request);
+	}
 
-		// Prüfen ob der Auftrag schon vergeben ist
-		// putIfAbsent gibt null zurück, wenn der Auftrag noch nicht vergeben war (und jetzt zugewiesen wird)
-		// Ansonsten wird der zugeordnete ClientId zurückgegeben
-		String previousClient = assignedJobs.putIfAbsent(request.getJobId(), request.getClientId());
-		boolean accepted = (previousClient == null);
+	/**
+	 * Wird von der GUI aufgerufen, wenn der Disponent eine Entscheidung trifft.
+	 */
+	public void sendAssignmentDecision(JobRequestMessage request, boolean accepted) {
+		if (accepted) {
+			// Prüfen ob der Auftrag schon vergeben ist
+			String previousClient = assignedJobs.putIfAbsent(request.getJobId(), request.getClientId());
+			if (previousClient != null) {
+				// Bereits vergeben – trotzdem Ablehnung senden
+				accepted = false;
+				simpleUi.appendMessage("HINWEIS: " + request.getJobId() + " war bereits an " + previousClient + " vergeben!");
+			}
+		}
 
 		JobAssignmentMessage response = new JobAssignmentMessage(
 				request.getJobId(), request.getClientId(), accepted);
 
 		topicJmsTemplate.convertAndSend(assignmentsTopic, response);
-
-		if (accepted) {
-			simpleUi.appendMessage("ZUGEWIESEN: " + request.getJobId() + " -> " + request.getClientId());
-		} else {
-			simpleUi.appendMessage("ABGELEHNT: " + request.getJobId() + " (bereits vergeben an " + previousClient + ")");
-		}
 	}
 }
