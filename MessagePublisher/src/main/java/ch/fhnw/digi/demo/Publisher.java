@@ -58,13 +58,14 @@ public class Publisher {
 
 	/**
 	 * Wird von der GUI aufgerufen, wenn der Disponent eine Entscheidung trifft.
+	 * @return true wenn tatsächlich zugewiesen, false wenn abgelehnt (auch bei Doppelvergabe)
 	 */
-	public void sendAssignmentDecision(JobRequestMessage request, boolean accepted) {
+	public boolean sendAssignmentDecision(JobRequestMessage request, boolean accepted) {
 		if (accepted) {
 			// Prüfen ob der Auftrag schon vergeben ist
 			String previousClient = assignedJobs.putIfAbsent(request.getJobId(), request.getClientId());
 			if (previousClient != null) {
-				// Bereits vergeben – trotzdem Ablehnung senden
+				// Bereits vergeben – Ablehnung senden
 				accepted = false;
 				simpleUi.appendMessage("HINWEIS: " + request.getJobId() + " war bereits an " + previousClient + " vergeben!");
 			}
@@ -74,5 +75,6 @@ public class Publisher {
 				request.getJobId(), request.getClientId(), accepted);
 
 		topicJmsTemplate.convertAndSend(assignmentsTopic, response);
+		return accepted;
 	}
 }

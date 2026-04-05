@@ -5,18 +5,21 @@
 Dieses Projekt implementiert ein verteiltes **Auftrags-Dispositionssystem** auf Basis von
 **Apache ActiveMQ** (Message Broker) und **Spring Boot JMS** (Java Message Service).
 
-Die Architektur bildet einen realistischen Geschäftsprozess ab: Eine zentrale **Disposition** erstellt
-Aufträge (Reparaturen und Wartungen) und verteilt diese über einen Message Broker an **Clients (Arbeiter)**.
-Die Arbeiter können Aufträge einsehen, nach Region und Auftragstyp filtern und einzelne Aufträge
-zur Zuweisung anfragen. Die Disposition prüft, ob der Auftrag noch verfügbar ist, und bestätigt
-oder lehnt die Anfrage ab.
+Eine zentrale **Disposition** (MessagePublisher) erstellt Aufträge manuell über eine GUI und
+verteilt diese über einen Message Broker an **Clients (Arbeiter)** (MessageConsumer).
+Die Aufträge werden dabei nicht nur auf einem allgemeinen Topic veröffentlicht, sondern zusätzlich
+auf **regionsspezifischen** und **typspezifischen** Topics (Content-Based Router).
+Clients können Aufträge über die Topic-Wahl und/oder clientseitige Filter nach Region und
+Auftragstyp filtern und senden automatisch eine Zuweisungsanfrage. Die Disposition entscheidet
+**manuell** über Zuweisung oder Ablehnung. Bei einer Zuweisung werden alle weiteren Anfragen
+für denselben Auftrag automatisch abgelehnt, sodass keine Doppelvergabe möglich ist.
 
 ### Module
 
 | Modul | Rolle | Beschreibung |
 |---|---|---|
-| **MessagePublisher** | Disposition | Erzeugt fortlaufend neue Aufträge und veröffentlicht sie. Empfängt Zuweisungsanfragen und prüft, ob ein Auftrag noch frei ist. |
-| **MessageConsumer** | Client / Arbeiter | Empfängt Aufträge vom Broker, filtert sie clientseitig nach Region und Auftragstyp, und fragt automatisch eine Zuweisung an. |
+| **MessagePublisher** | Disposition | Erstellt Aufträge per GUI und veröffentlicht sie auf Haupt- und Content-Based-Router-Topics. Empfängt Zuweisungsanfragen und entscheidet manuell über Zuweisung/Ablehnung. |
+| **MessageConsumer** | Client / Arbeiter | Empfängt Aufträge vom Broker, filtert per Topic-Wahl (Content-Based Router) und/oder clientseitig nach Region und Typ, fragt automatisch eine Zuweisung an. |
 
 ---
 
@@ -48,46 +51,54 @@ verarbeitet werden soll.
 ### 2.3 Gesamtfluss
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     ActiveMQ Broker (192.168.111.6:61616)               │
-│                                                                         │
-│  ┌─────────────────────────────┐    ┌────────────────────────────────┐  │
-│  │ Topic: group6.dispo.jobs.new│    │ Topic: group6.dispo.jobs.      │  │
-│  │                             │    │        assignments             │  │
-│  └──────────▲──────────────────┘    └───────────────┬────────────────┘  │
-│             │                                       │                   │
-│  ┌──────────┴──────────────────────────────────┐    │                   │
-│  │ Queue: group6.dispo.jobs.requestAssignment  │    │                   │
-│  └──────────────────────────▲──────────────────┘    │                   │
-│                             │                       │                   │
-└─────────────────────────────┼───────────────────────┼───────────────────┘
-                              │                       │
-       ┌──────────────────────┼───────────────────────┼──────────┐
-       │                      │                       │          │
-       │  SCHRITT 1           │  SCHRITT 3            ▼          │
-       │  Publisher erzeugt   │  Publisher sendet                 │
-       │  Auftrag und sendet  │  Antwort (JA/NEIN)              │
-       │  auf Topic           │  auf Topic                       │
-       │         │            │                                  │
-       │         │     ┌──────┴────────┐                         │
-       │         │     │  Publisher    │                          │
-       │         │     │ (Disposition) │                          │
-       │         │     └──────▲────────┘                         │
-       │         │            │                                  │
-       │         │     SCHRITT 2                                 │
-       │         │     Consumer sendet                           │
-       │         │     Anfrage auf Queue                         │
-       │         │            │                                  │
-       │         ▼            │           SCHRITT 4              │
-       │  ┌───────────────────┴───┐       Consumer empfängt      │
-       │  │     Consumer          │       Bestätigung            │
-       │  │  (Client/Arbeiter)    │◄─────────────────────        │
-       │  └───────────────────────┘                              │
-       └─────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                    ActiveMQ Broker (192.168.111.6:61616)                    │
+│                                                                            │
+│  Topics (Content-Based Router):          Queue:                            │
+│  ┌──────────────────────────────┐  ┌──────────────────────────────────┐   │
+│  │ group6.dispo.jobs.new        │  │ group6.dispo.jobs.               │   │
+│  │ group6.dispo.jobs.new.basel  │  │        requestAssignment         │   │
+│  │ group6.dispo.jobs.new.zuerich│  └──────────────▲───────────────────┘   │
+│  │ group6.dispo.jobs.new.bern   │                 │                       │
+│  │ group6.dispo.jobs.new.repair │  Topic:         │                       │
+│  │ group6.dispo.jobs.new.       │  ┌──────────────┴───────────────────┐   │
+│  │        maintenance           │  │ group6.dispo.jobs.assignments    │   │
+│  └──────────▲───────────────────┘  └──────────────┬───────────────────┘   │
+│             │                                     │                       │
+└─────────────┼─────────────────────────────────────┼───────────────────────┘
+              │                                     │
+   ┌──────────┼─────────────────────────────────────┼──────────┐
+   │          │                                     │          │
+   │  SCHRITT 1                    SCHRITT 3        ▼          │
+   │  Disponent erstellt           Disponent entscheidet       │
+   │  Auftrag in GUI und          manuell: Zuweisen            │
+   │  veröffentlicht auf          oder Ablehnen                │
+   │  mehreren Topics             (auto-Ablehnung bei          │
+   │  (Content-Based Router)       Doppelvergabe)              │
+   │         │            ┌──────────────────┐                 │
+   │         │            │   Publisher       │                 │
+   │         │            │  (Disposition)    │                 │
+   │         │            └────────▲─────────┘                 │
+   │         │                     │                           │
+   │         │              SCHRITT 2                          │
+   │         │              Consumer sendet                    │
+   │         │              Anfrage auf Queue                  │
+   │         │                     │                           │
+   │         ▼                     │        SCHRITT 4          │
+   │  ┌────────────────────────────┴──┐     Consumer empfängt  │
+   │  │        Consumer               │     Bestätigung oder   │
+   │  │     (Client / Arbeiter)       │◄─── Ablehnung          │
+   │  └───────────────────────────────┘                        │
+   └───────────────────────────────────────────────────────────┘
 
-Schritt 1: Disposition veröffentlicht alle 2 Sekunden einen neuen Auftrag auf dem Topic.
-Schritt 2: Client empfängt den Auftrag, prüft Region + Typ, und sendet eine Zuweisungsanfrage.
-Schritt 3: Disposition prüft ob der Auftrag noch frei ist und sendet Antwort (zugewiesen/abgelehnt).
+Schritt 1: Disponent erstellt einen Auftrag in der GUI (Region, Typ, Beschreibung).
+           Der Auftrag wird auf dem Haupt-Topic + regionsspezifischem + typspezifischem
+           Topic veröffentlicht (Content-Based Router).
+Schritt 2: Client empfängt den Auftrag, filtert nach Region + Typ, sendet automatisch
+           eine Zuweisungsanfrage an die Queue.
+Schritt 3: Disponent sieht die Anfrage in der GUI-Tabelle und entscheidet manuell:
+           Zuweisen oder Ablehnen. Bei Zuweisung werden alle weiteren Anfragen für
+           denselben Job automatisch abgelehnt.
 Schritt 4: Client empfängt die Antwort und zeigt das Ergebnis an.
 ```
 
@@ -98,54 +109,107 @@ Schritt 4: Client empfängt die Antwort und zeigt das Ergebnis an.
 ### 3.1 Namenskonvention
 
 Gemäss den Vorgaben des Dozenten müssen alle eigenen Topics und Queues mit dem **Gruppennamen
-gefolgt von einem Punkt** beginnen. Da wir Gruppe 6 sind, verwenden wir das Prefix `group6.`:
-
-```
-group6.dispo.jobs.new
-group6.dispo.jobs.requestAssignment
-group6.dispo.jobs.assignments
-```
-
+gefolgt von einem Punkt** beginnen. Da wir Gruppe 6 sind, verwenden wir das Prefix `group6.`.
 Damit sind unsere Channels klar von anderen Gruppen und dem Fremdsystem des Dozenten getrennt.
-Das ermöglicht einen parallelen Betrieb auf demselben Broker ohne Konflikte.
 
 ### 3.2 Channel-Übersicht
 
 | Channel-Name | Typ | Richtung | Nachrichtentyp | Beschreibung |
 |---|---|---|---|---|
-| `group6.dispo.jobs.new` | **Topic** | Disposition → Clients | `JobMessage` | Neue Aufträge werden hier veröffentlicht (alle 2 Sek.) |
-| `group6.dispo.jobs.requestAssignment` | **Queue** | Client → Disposition | `JobRequestMessage` | Clients senden Zuweisungsanfragen an diese Queue |
-| `group6.dispo.jobs.assignments` | **Topic** | Disposition → Clients | `JobAssignmentMessage` | Zuweisungsantworten werden hier veröffentlicht |
+| `group6.dispo.jobs.new` | **Topic** | Disposition → Clients | `JobMessage` | **Alle** neuen Aufträge |
+| `group6.dispo.jobs.new.basel` | **Topic** | Disposition → Clients | `JobMessage` | Nur Aufträge Region **Basel** (Content-Based Router) |
+| `group6.dispo.jobs.new.zuerich` | **Topic** | Disposition → Clients | `JobMessage` | Nur Aufträge Region **Zuerich** (Content-Based Router) |
+| `group6.dispo.jobs.new.bern` | **Topic** | Disposition → Clients | `JobMessage` | Nur Aufträge Region **Bern** (Content-Based Router) |
+| `group6.dispo.jobs.new.repair` | **Topic** | Disposition → Clients | `JobMessage` | Nur **Reparatur**-Aufträge (Content-Based Router) |
+| `group6.dispo.jobs.new.maintenance` | **Topic** | Disposition → Clients | `JobMessage` | Nur **Wartungs**-Aufträge (Content-Based Router) |
+| `group6.dispo.jobs.requestAssignment` | **Queue** | Client → Disposition | `JobRequestMessage` | Clients senden Zuweisungsanfragen |
+| `group6.dispo.jobs.assignments` | **Topic** | Disposition → Clients | `JobAssignmentMessage` | Zuweisungsantworten (zugewiesen/abgelehnt) |
 
 ### 3.3 Warum Topic für Aufträge und Antworten, aber Queue für Anfragen?
 
-- **Aufträge (Topic)**: Alle Clients sollen jeden neuen Auftrag sehen, um entscheiden zu können,
-  ob er für sie relevant ist. Ein Topic stellt sicher, dass die Nachricht an alle Subscriber
-  gleichzeitig zugestellt wird.
+- **Aufträge (Topic)**: Alle Clients sollen jeden neuen Auftrag sehen. Ein Topic stellt sicher,
+  dass die Nachricht an alle Subscriber gleichzeitig zugestellt wird.
 
-- **Zuweisungsanfragen (Queue)**: Eine Anfrage soll **genau einmal** verarbeitet werden.
-  Wenn mehrere Instanzen der Disposition liefen, würde eine Queue sicherstellen, dass jede
-  Anfrage nur von einer Instanz bearbeitet wird (Load Balancing).
+- **Zuweisungsanfragen (Queue)**: Jede Anfrage soll **genau einmal** verarbeitet werden.
+  Die Queue stellt sicher, dass jede Anfrage nur einmal bearbeitet wird.
 
 - **Zuweisungsantworten (Topic)**: Die Antwort wird über ein Topic verteilt, damit alle Clients
-  sie empfangen. Jeder Client filtert dann selbst, ob die Antwort an ihn gerichtet ist
-  (anhand der `clientId`).
+  sie empfangen. Jeder Client filtert selbst, ob die Antwort an ihn gerichtet ist (anhand der `clientId`).
+
+### 3.4 Content-Based Router
+
+Ein zentrales Architekturmuster in unserem System ist der **Content-Based Router** (EIP-Pattern).
+Beim Veröffentlichen eines Auftrags sendet die Disposition die Nachricht nicht nur auf das
+allgemeine Topic, sondern zusätzlich auf regionsspezifische und typspezifische Topics:
+
+```
+Auftrag: region=basel, type=repair
+  → group6.dispo.jobs.new              (alle Clients)
+  → group6.dispo.jobs.new.basel        (nur Basel-Clients)
+  → group6.dispo.jobs.new.repair       (nur Repair-Clients)
+```
+
+Dadurch können Clients über die **Topic-Wahl** bereits auf Broker-Ebene festlegen, welche
+Aufträge sie empfangen möchten. Die Filterung findet also nicht erst beim Client statt, sondern
+wird durch die Kanalstruktur der Topics ermöglicht. Dies ermöglicht eine **lose Kopplung**
+der Komponenten, eine **flexible Erweiterbarkeit** sowie eine **parallele Verarbeitung** von Aufträgen.
 
 ---
 
-## 4. Nachrichtentypen
+## 4. Filterung – Zwei Varianten
+
+Clients können Aufträge auf **zwei Wegen** filtern, die sich auch kombinieren lassen:
+
+### Variante 1: Content-Based Router (Topic-Wahl)
+
+Der Client abonniert ein spezifisches Topic und erhält nur die dafür bestimmten Aufträge.
+Die Filterung geschieht auf **Broker-Ebene** über die Wahl des Topics in `application.properties`:
+
+| Topic | Was kommt an? |
+|---|---|
+| `group6.dispo.jobs.new` | Alle Aufträge |
+| `group6.dispo.jobs.new.basel` | Nur Region Basel |
+| `group6.dispo.jobs.new.zuerich` | Nur Region Zuerich |
+| `group6.dispo.jobs.new.bern` | Nur Region Bern |
+| `group6.dispo.jobs.new.repair` | Nur Reparaturen |
+| `group6.dispo.jobs.new.maintenance` | Nur Wartungen |
+
+### Variante 2: Clientseitiger Filter
+
+Der Client abonniert das allgemeine Topic (`group6.dispo.jobs.new`) und filtert die empfangenen
+Nachrichten über die Properties `client.region` und `client.jobType`.
+Der Region-Filter unterstützt **komma-getrennte Mehrfachwerte** (z.B. `basel,zuerich`).
+Leer bedeutet, dass alle Regionen akzeptiert werden.
+
+### Kombination beider Varianten
+
+Beide Varianten lassen sich sinnvoll kombinieren. Beispiel:
+
+```properties
+# Topic für Basel + zusätzlich nach Typ filtern → nur Basel-Reparaturen
+channel.topic.newJobs=group6.dispo.jobs.new.basel
+client.jobType=repair
+```
+
+> **Achtung**: Nicht denselben Filter widersprüchlich setzen!
+> z.B. Topic `...new.basel` + `client.region=zuerich` → es kommt **nichts** an.
+>
+> Wenn ein regionsspezifisches oder typspezifisches Topic gewählt wird, den gleichartigen
+> clientseitigen Filter **leer lassen**. Der jeweils andere Filter kann weiterhin gesetzt werden.
+
+---
+
+## 5. Nachrichtentypen
 
 Alle Nachrichten werden als **JSON** über den Broker übertragen. Die Umwandlung zwischen
 Java-Objekten und JSON erfolgt automatisch über den `MappingJackson2MessageConverter`.
 
-### 4.1 JobMessage – Neuer Auftrag
-
-Wird von der Disposition auf dem Topic `group6.dispo.jobs.new` veröffentlicht.
+### 5.1 JobMessage – Neuer Auftrag
 
 ```json
 {
   "jobId": "JOB-0001",
-  "description": "repair Auftrag #1",
+  "description": "Reparatur an Heizungsanlage",
   "region": "basel",
   "jobType": "repair"
 }
@@ -155,33 +219,29 @@ Wird von der Disposition auf dem Topic `group6.dispo.jobs.new` veröffentlicht.
 |---|---|---|
 | `jobId` | String | Eindeutige Auftrags-ID (z.B. `JOB-0001`) |
 | `description` | String | Beschreibung des Auftrags |
-| `region` | String | Region des Auftrags (`basel`, `zuerich`, `bern`) |
-| `jobType` | String | Art des Auftrags (`repair` = Reparatur, `maintenance` = Wartung) |
+| `region` | String | Region (`basel`, `zuerich`, `bern`) |
+| `jobType` | String | Typ (`repair` = Reparatur, `maintenance` = Wartung) |
 
-### 4.2 JobRequestMessage – Zuweisungsanfrage
-
-Wird vom Client an die Queue `group6.dispo.jobs.requestAssignment` gesendet.
+### 5.2 JobRequestMessage – Zuweisungsanfrage
 
 ```json
 {
   "jobId": "JOB-0001",
-  "clientId": "group6"
+  "clientId": "group6_consumer"
 }
 ```
 
 | Feld | Typ | Beschreibung |
 |---|---|---|
 | `jobId` | String | ID des gewünschten Auftrags |
-| `clientId` | String | ID des anfragenden Clients (z.B. `group6`) |
+| `clientId` | String | ID des anfragenden Clients |
 
-### 4.3 JobAssignmentMessage – Zuweisungsantwort
-
-Wird von der Disposition auf dem Topic `group6.dispo.jobs.assignments` veröffentlicht.
+### 5.3 JobAssignmentMessage – Zuweisungsantwort
 
 ```json
 {
   "jobId": "JOB-0001",
-  "clientId": "group6",
+  "clientId": "group6_consumer",
   "assigned": true
 }
 ```
@@ -190,41 +250,42 @@ Wird von der Disposition auf dem Topic `group6.dispo.jobs.assignments` veröffen
 |---|---|---|
 | `jobId` | String | ID des angefragten Auftrags |
 | `clientId` | String | ID des anfragenden Clients |
-| `assigned` | boolean | `true` = Auftrag zugewiesen, `false` = Auftrag abgelehnt (bereits vergeben) |
+| `assigned` | boolean | `true` = zugewiesen, `false` = abgelehnt (bereits vergeben oder manuell abgelehnt) |
 
 ---
 
-## 5. Disposition (MessagePublisher)
+## 6. Disposition (MessagePublisher)
 
-### 5.1 Aufgabe
+### 6.1 Aufgabe
 
-Der Publisher simuliert die zentrale Disposition. Er hat zwei Verantwortlichkeiten:
+Der Publisher ist die zentrale Disposition mit drei Verantwortlichkeiten:
 
-1. **Aufträge erzeugen und veröffentlichen**: Alle 2 Sekunden wird ein neuer Auftrag erstellt
-   und auf dem Topic `group6.dispo.jobs.new` veröffentlicht. Die Aufträge rotieren durch die
-   Regionen (Basel → Zuerich → Bern) und Typen (Repair → Maintenance).
+1. **Aufträge manuell erstellen und veröffentlichen**: Über die GUI erstellt der Disponent einen
+   Auftrag (Job-ID, Beschreibung, Region, Typ). Beim Veröffentlichen wird der Auftrag auf dem
+   Haupt-Topic sowie auf den regionsspezifischen und typspezifischen Topics publiziert
+   (Content-Based Router).
 
-2. **Zuweisungsanfragen verarbeiten**: Der Publisher hört auf die Queue
-   `group6.dispo.jobs.requestAssignment`. Wenn ein Client einen Auftrag anfragt, prüft die
-   Disposition, ob der Auftrag bereits vergeben ist.
+2. **Zuweisungsanfragen empfangen**: Der Publisher hört auf die Queue
+   `group6.dispo.jobs.requestAssignment`. Eingehende Anfragen erscheinen in einer Tabelle in der GUI.
 
-### 5.2 Duplikatsprüfung
+3. **Manuell über Zuweisung entscheiden**: Der Disponent wählt eine Anfrage aus und klickt
+   «Zuweisen» oder «Ablehnen». Bei Zuweisung werden alle weiteren Anfragen für denselben
+   Auftrag **automatisch abgelehnt** (Duplikatsprüfung via `ConcurrentHashMap`).
 
-Um zu verhindern, dass derselbe Auftrag an mehrere Clients vergeben wird, führt die Disposition
-eine `ConcurrentHashMap` (Thread-sicher), die alle vergebenen Aufträge speichert:
+### 6.2 Duplikatsprüfung & Auto-Ablehnung
 
-```java
-Map<String, String> assignedJobs = new ConcurrentHashMap<>();  // JobId → ClientId
-```
+Die Disposition führt eine Thread-sichere Map aller vergebenen Aufträge (`JobId → ClientId`).
+Bei Zuweisung wird `putIfAbsent()` verwendet – ist der Auftrag bereits vergeben, wird
+automatisch abgelehnt. Zusätzlich werden alle weiteren Anfragen in der Tabelle für denselben
+Job sofort entfernt und per Ablehnungsnachricht beantwortet.
 
-Bei einer neuen Anfrage wird `putIfAbsent()` verwendet:
-- **Rückgabe `null`** → Der Auftrag war noch nicht vergeben → Zuweisung akzeptiert ✅
-- **Rückgabe `"group3"`** → Der Auftrag ist bereits an `group3` vergeben → Zuweisung abgelehnt ❌
+### 6.3 GUI (Publisher)
 
-Diese Methode ist **atomar** (Thread-sicher), sodass auch bei gleichzeitigen Anfragen
-korrekt geprüft wird.
+- **Oben**: Formular zum Erstellen von Aufträgen (Job-ID automatisch, Beschreibung, Region-Dropdown, Typ-Dropdown, «Veröffentlichen»-Button)
+- **Mitte**: Tabelle mit eingehenden Zuweisungsanfragen (Job-ID, Client-ID, Zeitpunkt) + Buttons «Zuweisen» / «Ablehnen»
+- **Unten**: Protokoll-Log aller Ereignisse
 
-### 5.3 JMS-Konfiguration (Publisher)
+### 6.4 JMS-Konfiguration (Publisher)
 
 | Bean | Typ | Zweck |
 |---|---|---|
@@ -234,61 +295,28 @@ korrekt geprüft wird.
 
 ---
 
-## 6. Client (MessageConsumer)
+## 7. Client / Arbeiter (MessageConsumer)
 
-### 6.1 Aufgabe
+### 7.1 Aufgabe
 
-Der Consumer ist der Client / Arbeiter. Er hat drei Verantwortlichkeiten:
+Der Consumer ist der Client / Arbeiter mit drei Verantwortlichkeiten:
 
-1. **Aufträge empfangen**: Hört auf das Topic `group6.dispo.jobs.new` und empfängt alle
-   neuen Aufträge.
+1. **Aufträge empfangen**: Hört auf das konfigurierte Topic (allgemein oder spezifisch per
+   Content-Based Router).
 
-2. **Aufträge filtern**: Bevor ein Auftrag verarbeitet wird, prüft der Client zwei
-   konfigurierbare Filter:
-   - **Region-Filter**: Nur Aufträge der konfigurierten Region werden angenommen.
-   - **JobType-Filter**: Nur Aufträge des konfigurierten Typs werden angenommen.
-   Sind die Filter leer, werden alle Aufträge akzeptiert.
+2. **Aufträge filtern**: Clientseitig werden zwei konfigurierbare Filter angewendet:
+   - **Region-Filter** (`client.region`): Komma-getrennt möglich, z.B. `basel,zuerich`. Leer = alle.
+   - **JobType-Filter** (`client.jobType`): `repair` oder `maintenance`. Leer = alle.
 
-3. **Zuweisung anfragen und Antwort empfangen**: Für jeden akzeptierten Auftrag sendet der Client
-   automatisch eine Zuweisungsanfrage an die Queue. Anschliessend empfängt er die Antwort
-   vom Topic `group6.dispo.jobs.assignments` und zeigt an, ob der Auftrag zugewiesen oder
-   abgelehnt wurde.
+3. **Zuweisung anfragen und Ergebnis anzeigen**: Für jeden akzeptierten Auftrag wird automatisch
+   eine Zuweisungsanfrage an die Queue gesendet. Die Antwort (zugewiesen/abgelehnt) wird im Log angezeigt.
 
-### 6.2 Clientseitige Filterung
+### 7.2 GUI (Consumer)
 
-Die Filterung findet bewusst auf der **Client-Seite** statt und nicht auf dem Broker.
-Der Broker liefert über das Topic alle Aufträge an alle Subscriber. Jeder Client entscheidet
-dann selbst, ob der Auftrag für ihn relevant ist. Dieser Ansatz ist einfach umzusetzen und
-entspricht der vereinfachten Lösung gemäss Aufgabenstellung. In einem Produktionssystem würde
-man alternativ einen **Content-Based Router** auf Broker-Ebene einsetzen, der Aufträge
-automatisch an regionsspezifische Channels verteilt.
+- Einfaches Log-Fenster mit allen empfangenen Aufträgen, Zuweisungsanfragen und Antworten
+- Titel zeigt aktive Filter an: `"Auftrags-Client [group6_consumer] - Clientseitige-Filterung: Region: alle | Typ: alle"`
 
-```java
-// Region-Filter: Auftrag ignorieren, wenn er nicht zur konfigurierten Region passt
-if (filterRegion != null && !filterRegion.isEmpty()
-        && !filterRegion.equalsIgnoreCase(job.getRegion())) {
-    return;
-}
-
-// JobType-Filter: Auftrag ignorieren, wenn er nicht zum konfigurierten Typ passt
-if (filterJobType != null && !filterJobType.isEmpty()
-        && !filterJobType.equalsIgnoreCase(job.getJobType())) {
-    return;
-}
-```
-
-### 6.3 Zuweisungsantworten filtern
-
-Da Zuweisungsantworten über ein **Topic** verteilt werden, empfangen alle Clients alle Antworten.
-Jeder Client prüft daher, ob die Antwort an ihn gerichtet ist:
-
-```java
-if (!clientId.equals(assignment.getClientId())) {
-    return;  // Antwort ist für einen anderen Client
-}
-```
-
-### 6.4 JMS-Konfiguration (Consumer)
+### 7.3 JMS-Konfiguration (Consumer)
 
 | Bean | Typ | Zweck |
 |---|---|---|
@@ -301,12 +329,11 @@ und empfängt von Queues, der Consumer sendet auf Queues und empfängt von Topic
 
 ---
 
-## 7. Konfiguration
+## 8. Konfiguration
 
 Alle konfigurierbaren Werte befinden sich in den `application.properties`-Dateien.
-So lässt sich das Verhalten ändern, ohne den Quellcode anzupassen.
 
-### 7.1 Publisher (MessagePublisher)
+### 8.1 Publisher (MessagePublisher)
 
 ```properties
 spring.activemq.broker-url=tcp://192.168.111.6:61616
@@ -318,75 +345,100 @@ channel.queue.requestAssignment=group6.dispo.jobs.requestAssignment
 channel.topic.assignments=group6.dispo.jobs.assignments
 ```
 
-### 7.2 Consumer (MessageConsumer)
+### 8.2 Consumer (MessageConsumer)
 
 ```properties
 spring.activemq.broker-url=tcp://192.168.111.6:61616
 spring.activemq.user=admin
 spring.activemq.password=admin
 
-client.id=group6
-client.region=                    # leer = alle Regionen
-client.jobType=                   # leer = alle Typen
+client.id=group6_consumer
 
-channel.topic.newJobs=group6.dispo.jobs.new
 channel.queue.requestAssignment=group6.dispo.jobs.requestAssignment
 channel.topic.assignments=group6.dispo.jobs.assignments
+
+# --- Topic-Wahl (Content-Based Router) ---
+# Alle:        group6.dispo.jobs.new
+# Nur Basel:   group6.dispo.jobs.new.basel
+# Nur Zuerich: group6.dispo.jobs.new.zuerich
+# Nur Bern:    group6.dispo.jobs.new.bern
+# Nur Repair:  group6.dispo.jobs.new.repair
+# Nur Wartung: group6.dispo.jobs.new.maintenance
+channel.topic.newJobs=group6.dispo.jobs.new
+
+# --- Clientseitige Filter (leer = alle) ---
+client.region=
+client.jobType=
 ```
 
-### 7.3 Filteroptionen
+### 8.3 Filteroptionen
 
-#### Region-Filter
-
-| Wert | Verhalten |
-|---|---|
-| `client.region=` | Empfängt Aufträge **aller** Regionen |
-| `client.region=basel` | Nur Aufträge der Region Basel |
-| `client.region=zuerich` | Nur Aufträge der Region Zuerich |
-| `client.region=bern` | Nur Aufträge der Region Bern |
-
-#### JobType-Filter
+#### Region-Filter (clientseitig)
 
 | Wert | Verhalten |
 |---|---|
-| `client.jobType=` | Empfängt **alle** Auftragstypen |
-| `client.jobType=repair` | Nur Reparatur-Aufträge |
-| `client.jobType=maintenance` | Nur Wartungs-Aufträge |
+| `client.region=` | Alle Regionen |
+| `client.region=basel` | Nur Basel |
+| `client.region=zuerich` | Nur Zuerich |
+| `client.region=bern` | Nur Bern |
+| `client.region=basel,zuerich` | Basel und Zuerich |
 
-Beide Filter lassen sich kombinieren:
+#### JobType-Filter (clientseitig)
+
+| Wert | Verhalten |
+|---|---|
+| `client.jobType=` | Alle Typen |
+| `client.jobType=repair` | Nur Reparaturen |
+| `client.jobType=maintenance` | Nur Wartungen |
+
+#### Kombinationsbeispiele
+
 ```properties
-client.region=basel
+# Alle Aufträge, keine Filter
+channel.topic.newJobs=group6.dispo.jobs.new
+client.region=
+client.jobType=
+
+# Nur Basel (Content-Based Router)
+channel.topic.newJobs=group6.dispo.jobs.new.basel
+client.region=
+client.jobType=
+
+# Nur Reparaturen aus Basel (Router + clientseitiger Filter)
+channel.topic.newJobs=group6.dispo.jobs.new.basel
+client.region=
 client.jobType=repair
-# → Nur Reparatur-Aufträge aus der Region Basel
+
+# Basel und Bern, nur Wartung (clientseitig)
+channel.topic.newJobs=group6.dispo.jobs.new
+client.region=basel,bern
+client.jobType=maintenance
 ```
 
 ---
 
-## 8. Starten der Anwendung
+## 9. Starten der Anwendung
 
-### 8.1 Voraussetzungen
+### 9.1 Voraussetzungen
 
 - Java 11+ (getestet mit OpenJDK 25)
 - Maven
 - ActiveMQ Broker erreichbar unter `192.168.111.6:61616`
 
-### 8.2 Reihenfolge
+### 9.2 Reihenfolge
 
-```
-1. ActiveMQ Broker muss laufen (192.168.111.6:61616)
-2. MessagePublisher starten (simuliert die Disposition)
-3. MessageConsumer starten (Client / Arbeiter)
-```
+1. ActiveMQ Broker muss laufen (`192.168.111.6:61616`)
+2. **MessagePublisher** starten (Disposition)
+3. **MessageConsumer** starten (Client / Arbeiter)
 
-Der Publisher sollte **zuerst** gestartet werden, da der Consumer sonst die ersten Aufträge
-verpasst (Topics liefern nur Nachrichten an aktive Subscriber).
+Der Publisher sollte **zuerst** gestartet werden, da Topics nur Nachrichten an aktive Subscriber liefern.
 
-### 8.3 Aus IntelliJ IDEA
+### 9.3 Aus IntelliJ IDEA
 
 1. **MessagePublisher**: `MessageApplication.java` → Rechtsklick → Run
 2. **MessageConsumer**: `MessageConsumerApplication.java` → Rechtsklick → Run
 
-### 8.4 Aus der Kommandozeile (Maven)
+### 9.4 Aus der Kommandozeile (Maven)
 
 ```bash
 # Terminal 1: Publisher (Disposition) starten
@@ -397,21 +449,6 @@ mvn spring-boot:run
 cd MessageConsumer
 mvn spring-boot:run
 ```
-
----
-
-## 9. GUI
-
-Beide Module verfügen über eine einfache **Swing-Oberfläche** zur Laufzeitüberwachung.
-
-### Publisher-Fenster
-- Titel: `"Disposition - Job Publisher"`
-- Zeigt veröffentlichte Aufträge und Zuweisungsentscheidungen im Log
-
-### Consumer-Fenster
-- Titel: `"Auftrags-Client [group6] - Region: alle | Typ: alle"`
-- Zeigt empfangene Aufträge, Zuweisungsanfragen und Bestätigungen im Log
-- Titel passt sich dynamisch an die aktiven Filter an
 
 ---
 
@@ -427,7 +464,7 @@ messagingSample_group6/
 │       │   ├── MessageApplication.java        # Spring Boot Einstiegspunkt
 │       │   ├── Publisher.java                 # Aufträge veröffentlichen + Anfragen verarbeiten
 │       │   ├── JmsConfig.java                 # JMS Topic/Queue Konfiguration
-│       │   ├── SimpleUi.java                  # Swing GUI (Log-Anzeige)
+│       │   ├── SimpleUi.java                  # Swing GUI (Aufträge erstellen, Anfragen bearbeiten, Log)
 │       │   ├── JobMessage.java                # Nachrichtentyp: Auftrag
 │       │   ├── JobRequestMessage.java         # Nachrichtentyp: Zuweisungsanfrage
 │       │   └── JobAssignmentMessage.java      # Nachrichtentyp: Zuweisungsantwort
@@ -439,7 +476,7 @@ messagingSample_group6/
 │   └── src/main/
 │       ├── java/ch/fhnw/digi/demo/
 │       │   ├── MessageConsumerApplication.java # Spring Boot Einstiegspunkt
-│       │   ├── Receiver.java                   # Aufträge empfangen + filtern
+│       │   ├── Receiver.java                   # Aufträge empfangen + filtern + Zuweisung anfragen
 │       │   ├── JmsConfig.java                  # JMS Topic/Queue Konfiguration
 │       │   ├── SimpleUi.java                   # Swing GUI (Log + Filter-Anzeige)
 │       │   ├── JobMessage.java                 # Nachrichtentyp: Auftrag

@@ -206,12 +206,35 @@ public class SimpleUi extends JFrame {
 		JobRequestMessage request = pendingRequests.remove(row);
 		requestTableModel.removeRow(row);
 
-		publisher.sendAssignmentDecision(request, accepted);
+		// sendAssignmentDecision gibt true zurück wenn tatsächlich zugewiesen,
+		// false wenn abgelehnt (z.B. weil Job bereits an anderen Client vergeben)
+		boolean actualResult = publisher.sendAssignmentDecision(request, accepted);
 
-		if (accepted) {
+		if (actualResult) {
 			appendMessage("ZUGEWIESEN: " + request.getJobId() + " -> " + request.getClientId());
+
+			// Alle anderen Anfragen für denselben Job automatisch ablehnen
+			autoRejectRemainingRequests(request.getJobId());
 		} else {
 			appendMessage("ABGELEHNT: " + request.getJobId() + " (Client: " + request.getClientId() + ")");
+		}
+	}
+
+	/**
+	 * Lehnt alle verbleibenden Anfragen für die gegebene JobId automatisch ab
+	 * und entfernt sie aus der Tabelle.
+	 */
+	private void autoRejectRemainingRequests(String jobId) {
+		// Rückwärts iterieren, damit Indizes beim Entfernen stimmen
+		for (int i = pendingRequests.size() - 1; i >= 0; i--) {
+			JobRequestMessage other = pendingRequests.get(i);
+			if (other.getJobId().equals(jobId)) {
+				pendingRequests.remove(i);
+				requestTableModel.removeRow(i);
+				// Ablehnung an den anderen Client senden
+				publisher.sendAssignmentDecision(other, false);
+				appendMessage("AUTO-ABGELEHNT: " + jobId + " (Client: " + other.getClientId() + " - Job bereits vergeben)");
+			}
 		}
 	}
 
