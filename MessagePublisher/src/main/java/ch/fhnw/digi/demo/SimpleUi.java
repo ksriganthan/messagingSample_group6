@@ -28,6 +28,7 @@ public class SimpleUi extends JFrame {
 	private JTextField descriptionField;
 	private JComboBox<String> regionCombo;
 	private JComboBox<String> typeCombo;
+	private JTextField scheduledDateTimeField;
 	private JLabel jobIdLabel;
 	private int jobCounter = 0;
 
@@ -97,8 +98,15 @@ public class SimpleUi extends JFrame {
 		typeCombo = new JComboBox<>(new String[]{"repair", "maintenance"});
 		panel.add(typeCombo, gbc);
 
+		// Geplantes Datum & Uhrzeit
+		gbc.gridx = 0; gbc.gridy = 4;
+		panel.add(new JLabel("Termin (z.B. 2026-04-16T14:00):"), gbc);
+		gbc.gridx = 1;
+		scheduledDateTimeField = new JTextField("2026-04-16T14:00");
+		panel.add(scheduledDateTimeField, gbc);
+
 		// Publish-Button
-		gbc.gridx = 2; gbc.gridy = 2; gbc.gridheight = 2;
+		gbc.gridx = 2; gbc.gridy = 2; gbc.gridheight = 3;
 		gbc.fill = GridBagConstraints.BOTH;
 		JButton publishBtn = new JButton("Veröffentlichen");
 		publishBtn.setFont(publishBtn.getFont().deriveFont(Font.BOLD, 13f));
@@ -182,13 +190,14 @@ public class SimpleUi extends JFrame {
 		String description = descriptionField.getText().trim();
 		String region = (String) regionCombo.getSelectedItem();
 		String jobType = (String) typeCombo.getSelectedItem();
+		String scheduledDateTime = scheduledDateTimeField.getText().trim();
 
 		if (description.isEmpty()) {
 			JOptionPane.showMessageDialog(this, "Bitte Beschreibung eingeben.");
 			return;
 		}
 
-		JobMessage job = new JobMessage(jobId, description, region, jobType);
+		JobMessage job = new JobMessage(jobId, description, region, jobType, scheduledDateTime);
 		publisher.publishJob(job);
 
 		appendMessage("VERÖFFENTLICHT: " + job);
